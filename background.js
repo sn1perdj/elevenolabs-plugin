@@ -16,6 +16,7 @@ const DEFAULT_STATE = {
 
 const PROCESS_ALARM = "process-next-row";
 let pendingDownloadNameCache = null;
+let pendingDownloadJob = null;
 
 chrome.runtime.onInstalled.addListener(() => {
   void initializeState();
@@ -38,17 +39,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
-  const pendingName = pendingDownloadNameCache;
+  const pendingName = pendingDownloadJob?.filenameBase || pendingDownloadNameCache;
   if (!pendingName) {
     suggest();
     return;
   }
 
   const extension = getExtensionFromItem(item);
+  const expectedFilename = `${pendingName}${extension}`;
   suggest({
-    filename: `${pendingName}${extension}`,
+    filename: expectedFilename,
     conflictAction: "overwrite"
   });
+
+  if (pendingDownloadJob) {
+    pendingDownloadJob.downloadId = item.id;
+    pendingDownloadJob.expectedFilename = expectedFilename;
+  }
 
   pendingDownloadNameCache = null;
   void setState({
@@ -56,6 +63,10 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   });
 
   return true;
+});
+
+chrome.downloads.onChanged.addListener((delta) => {
+  void handleDownloadChanged(delta);
 });
 
 async function handleMessage(message) {
@@ -75,10 +86,6 @@ async function handleMessage(message) {
       return { ok: true };
     case "stop-run":
       await stopRun("Stopped by user.");
-      return { ok: true };
-    case "prepare-download":
-      pendingDownloadNameCache = String(message.filenameBase);
-      await setState({ pendingDownloadName: pendingDownloadNameCache });
       return { ok: true };
     default:
       return { ok: false, error: "Unknown message type." };
@@ -114,6 +121,8 @@ async function saveDraft({ sheetUrl, startRow, replayRow }) {
 async function startBatch(sheetUrl, startRow) {
   const normalizedStart = normalizeRow(startRow, 1);
   validateSheetUrl(sheetUrl);
+  rejectPendingDownload(new Error("Starting a new batch."));
+  pendingDownloadNameCache = null;
 
   await setState({
     sheetUrl,
@@ -135,6 +144,8 @@ async function replayRow(sheetUrl, replayRowValue) {
   if (!normalizedRow) {
     throw new Error("Replay row must be 1 or higher.");
   }
+  rejectPendingDownload(new Error("Starting a replay run."));
+  pendingDownloadNameCache = null;
 
   await setState({
     sheetUrl,
@@ -152,6 +163,7 @@ async function replayRow(sheetUrl, replayRowValue) {
 
 async function stopRun(reason = "Run stopped.") {
   await chrome.alarms.clear(PROCESS_ALARM);
+  rejectPendingDownload(new Error(reason));
   pendingDownloadNameCache = null;
   await setState({
     running: false,
@@ -196,18 +208,21 @@ async function processNextRow() {
     await log(`Processing row H${rowNumber}.`);
     const tabId = await ensureElevenLabsTab();
     await waitForTabReady(tabId);
+    const downloadWaiter = waitForPendingDownload(String(rowNumber));
     const response = await chrome.tabs.sendMessage(tabId, {
       type: "process-text",
       payload: {
         text: rowData.text,
-        rowNumber,
-        filenameBase: String(rowNumber)
+        rowNumber
       }
     });
 
     if (!response?.ok) {
+      rejectPendingDownload(new Error(response?.error || "Unknown content script failure."));
       throw new Error(response?.error || "Unknown content script failure.");
     }
+
+    await downloadWaiter;
 
     await setState({
       lastProcessedRow: rowNumber,
@@ -237,6 +252,7 @@ async function processNextRow() {
       pendingDownloadName: null
     });
     pendingDownloadNameCache = null;
+    rejectPendingDownload(new Error(message));
     await chrome.alarms.clear(PROCESS_ALARM);
     await log(`Error: ${message}`);
   }
@@ -398,6 +414,97 @@ function normalizeRow(value, fallback) {
 function getExtensionFromItem(item) {
   const parsed = item.filename?.match(/(\.[a-z0-9]+)$/i);
   return parsed ? parsed[1] : ".mp3";
+}
+
+async function waitForPendingDownload(filenameBase) {
+  if (pendingDownloadJob) {
+    rejectPendingDownload(new Error("A previous download job was still pending."));
+  }
+
+  pendingDownloadNameCache = filenameBase;
+  const resultPromise = new Promise((resolve, reject) => {
+    pendingDownloadJob = {
+      filenameBase,
+      expectedFilename: null,
+      downloadId: null,
+      resolve,
+      reject,
+      timeoutId: setTimeout(() => {
+        rejectPendingDownload(new Error(`Timed out waiting for download ${filenameBase}.`));
+      }, 120000)
+    };
+  });
+  await setState({ pendingDownloadName: filenameBase });
+
+  return resultPromise;
+}
+
+async function handleDownloadChanged(delta) {
+  if (!pendingDownloadJob || pendingDownloadJob.downloadId !== delta.id) {
+    return;
+  }
+
+  if (delta.state?.current === "interrupted") {
+    rejectPendingDownload(new Error(`Download interrupted for ${pendingDownloadJob.filenameBase}.`));
+    return;
+  }
+
+  if (delta.state?.current !== "complete") {
+    return;
+  }
+
+  const [download] = await chrome.downloads.search({ id: delta.id });
+  if (!download) {
+    rejectPendingDownload(new Error(`Could not verify completed download for ${pendingDownloadJob.filenameBase}.`));
+    return;
+  }
+
+  const actualName = getBasename(download.filename || "");
+  const expectedName = pendingDownloadJob.expectedFilename;
+  if (!expectedName) {
+    rejectPendingDownload(new Error(`Could not determine expected filename for row ${pendingDownloadJob.filenameBase}.`));
+    return;
+  }
+
+  if (actualName.toLowerCase() !== expectedName.toLowerCase()) {
+    rejectPendingDownload(
+      new Error(`Downloaded file mismatch for row ${pendingDownloadJob.filenameBase}: got ${actualName}, expected ${expectedName}.`)
+    );
+    return;
+  }
+
+  resolvePendingDownload({
+    downloadId: delta.id,
+    filename: actualName
+  });
+}
+
+function getBasename(filepath) {
+  const normalized = String(filepath || "").replace(/\\/g, "/");
+  const parts = normalized.split("/");
+  return parts[parts.length - 1] || "";
+}
+
+function resolvePendingDownload(value) {
+  if (!pendingDownloadJob) {
+    return;
+  }
+
+  clearTimeout(pendingDownloadJob.timeoutId);
+  const { resolve } = pendingDownloadJob;
+  pendingDownloadJob = null;
+  resolve(value);
+}
+
+function rejectPendingDownload(error) {
+  if (!pendingDownloadJob) {
+    return;
+  }
+
+  clearTimeout(pendingDownloadJob.timeoutId);
+  const { reject } = pendingDownloadJob;
+  pendingDownloadJob = null;
+  reject(error);
 }
 
 async function getState() {

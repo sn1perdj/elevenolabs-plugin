@@ -15,7 +15,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-async function processText({ text, filenameBase }) {
+async function processText({ text }) {
   const textarea = await waitForElement(findTextInput, 30000, "Could not find the ElevenLabs text input.");
   await fillInput(textarea, text);
 
@@ -24,11 +24,6 @@ async function processText({ text, filenameBase }) {
 
   await waitForGenerationToFinish(generateButton);
   const downloadButton = await waitForElement(findDownloadButton, 120000, "Audio was not ready for download.");
-
-  await chrome.runtime.sendMessage({
-    type: "prepare-download",
-    filenameBase
-  });
 
   downloadButton.click();
   await delay(3000);
