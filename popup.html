@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ElevenLabs Sheet Runner</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="app">
+      <section class="hero">
+        <p class="eyebrow">ElevenLabs Workflow</p>
+        <h1>Sheet Runner</h1>
+        <p class="subcopy">Read column H from Google Sheets, generate audio in ElevenLabs, and save each file as its row number.</p>
+      </section>
+
+      <section class="panel">
+        <label class="field">
+          <span>Google Sheet URL</span>
+          <input id="sheetUrl" type="url" placeholder="https://docs.google.com/spreadsheets/d/...">
+        </label>
+
+        <div class="grid">
+          <label class="field">
+            <span>Start From Row</span>
+            <input id="startRow" type="number" min="1" placeholder="1">
+          </label>
+
+          <label class="field">
+            <span>Replay Single Row</span>
+            <input id="replayRow" type="number" min="1" placeholder="45">
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="openTabBtn" class="ghost" type="button">Open ElevenLabs</button>
+          <button id="startBtn" class="primary" type="button">Start Batch</button>
+          <button id="replayBtn" class="secondary" type="button">Replay Row</button>
+          <button id="stopBtn" class="danger" type="button">Stop</button>
+        </div>
+      </section>
+
+      <section class="status-card">
+        <div class="status-topline">
+          <span id="statusBadge" class="badge idle">Idle</span>
+          <span id="modeLabel" class="muted">No active run</span>
+        </div>
+        <dl class="stats">
+          <div>
+            <dt>Current Row</dt>
+            <dd id="currentRowValue">-</dd>
+          </div>
+          <div>
+            <dt>Last Done</dt>
+            <dd id="lastProcessedValue">-</dd>
+          </div>
+          <div>
+            <dt>Sheet Rows</dt>
+            <dd id="totalRowsValue">-</dd>
+          </div>
+          <div>
+            <dt>Last Error</dt>
+            <dd id="lastErrorValue">None</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="log-card">
+        <div class="card-head">
+          <h2>Recent Activity</h2>
+          <button id="refreshBtn" class="text-btn" type="button">Refresh</button>
+        </div>
+        <ul id="logList" class="log-list">
+          <li class="placeholder">No activity yet.</li>
+        </ul>
+      </section>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "ElevenLabs Sheet Runner",
+  "description": "Read Google Sheets column H and automate ElevenLabs generation with persistent progress.",
+  "version": "1.0.0",
+  "permissions": [
+    "storage",
+    "tabs",
+    "downloads",
+    "alarms",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://docs.google.com/*",
+    "https://*.googleusercontent.com/*",
+    "https://elevenlabs.io/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "ElevenLabs Sheet Runner",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://elevenlabs.io/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
